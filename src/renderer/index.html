@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>宜联商城</title>
+<!--    开发版本-->
+    <!-- <script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script> -->
+
+<!--    生产版本-->
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
+    <style>@import "../../node_modules/ant-design-vue/dist/antd.css";</style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<template id="template">
+    <div style="text-align: center">
+        <h2>抽奖活动</h2>
+
+        <a-button v-on:click="selectFile()">打开订单列表</a-button><a-divider type="vertical"></a-divider>
+
+        <a-input-number v-model="minute" :max="10" :min="0" :precision="0"></a-input-number>分<a-divider type="vertical"></a-divider>
+        <a-input-number v-model="second" :max="60" :min="0" :precision="0"></a-input-number>秒<a-divider type="vertical"></a-divider>
+
+        <a-button v-on:click="drawPrize" type="primary" :disabled="tableData.length===0 || (minute + second) === 0">开始抽奖</a-button>
+
+        <a-table :columns="columns" :data-source="tableData" row-key="序号" :title="() => filename" :pagination="false"></a-table>
+
+        <a-modal
+                title='随机抽奖'
+                :visible="drawingPrizeVisible"
+                :width="640" :closable="false" :footer="null" :mask-closable="false" :keyboard="false"
+        >
+            <p>计时: <b style="color: red">{{browsingTime.minute.toString().padStart(2, '0')}} : {{browsingTime.second.toString().padStart(2, '0')}}</b></p>
+
+            <span>序号: <b style="color: green">{{browsingOrder.序号}}</b></span> <a-divider type='vertical'></a-divider>
+            <span>客户名称: <b style="color: green">{{browsingOrder.收件人}}</b></span> <a-divider type='vertical'></a-divider>
+            <span>订单号: <b style="color: green">{{browsingOrder.订单号}}</b></span> <a-divider type='vertical'></a-divider>
+            <span>手机号: <b style="color: green">{{formatPhone(browsingOrder.收件人电话)}}</b></span>
+        </a-modal>
+
+        <a-modal></a-modal>
+    </div>
+</template>
+
+<script>
+    const {remote, ipcRenderer} = require('electron')
+    const fs = require('fs')
+    const os = require('os')
+    const iconv = require('iconv-lite')
+
+    const DIR = os.homedir() + '\\Documents\\' + 'prize_orders\\' // 文件目录路径
+    const TITLES = '序号,订单号,商品名,收件人,收件人电话,收件人地址' // 文件标题行
+
+    let {Button, Modal, InputNumber} = require('ant-design-vue')
+    Vue.use(Button, Modal, InputNumber)
+
+    new Vue({
+        el: '#app',
+        template,
+        data: {
+            filename: null, // 文件名
+            columns: [], // 表格字段列表
+            tableData: [], // 表格数据
+            drawingPrizeVisible: false, // 抽奖模态框显示
+            minute: 0, // 抽奖设定时间之分钟
+            second: 0, // 抽奖设定时间之秒钟
+            browsingTime: {minute: -1, second: 59}, // 抽奖计时
+            browsingOrder: {}, // 获取的随机订单
+        },
+
+        methods: {
+            // 选择订单文件
+            selectFile: function () {
+                // let browserWindow = ipcRenderer.sendSync('onShowOpenDialog', 'hello')
+                // console.log(browserWindow)
+                // 打开选择文件窗口
+                remote.dialog.showOpenDialog({
+                    title: '选择订单列表',
+                    buttonLabel: '打开',
+                    filters: [{name: 'excel', extensions: ['csv']}]
+                }).then(res => {
+                    // 获取路径名称及文件名
+                    let filePath = res.filePaths[0]
+                    // 打开文件
+                    if (filePath) this.getTableData(filePath)
+                })
+            },
+
+            // 隐藏电话号码
+            formatPhone: phone => phone ? phone.replace(/^(\d{3})\d{4}/, '$1' + '*'.repeat(4)) : '',
+
+            // 打开选择的文件、解析文件内容
+            getTableData: function (path) {
+                // 读取文件内容并转码
+                let data = iconv.decode(fs.readFileSync(path), 'gbk').trim().split('\n')
+
+                // 解析标题
+                let titles = data[0].trim().split(',')
+
+                // 检查标题
+                if (!titles.includes('订单号') || !titles.includes('商品名') || !titles.includes('收件人') || !titles.includes('收件人电话')
+                    || !titles.includes('收件人地址')) return Modal.error({content: '文件格式不正确!', okText: '确定'})
+
+                this.filename = path.replace(/^.+\\([^\\]+)\.csv$/, "$1") // 文件名格式化
+                // 获取字段列表
+                this.columns = titles.map((title, index) => ({
+                    key: index,
+                    title,
+                    dataIndex: title,
+                    width: index === 0 ? 50 : 120,
+                    ellipsis: true,
+                    fixed: index === 0 ? 'left' : null,
+                    customRender: text => title === '收件人电话' ? this.formatPhone(text) : text
+                }))
+
+                // 获取订单列表数据
+                this.tableData = data.slice(1).map(record => {
+                    let data = {}
+                    record.trim().split(',').forEach((item, index) => data[titles[index]] = item.replace(/"/g, ''))
+                    return data
+                })
+            },
+
+            // 实施抽奖
+            drawPrize: function () {
+                this.drawingPrizeVisible = true
+
+                let len = this.tableData.length
+                let order = {} // 获取的随机订单
+                // 随机获取订单
+                const getBrowsingOrder = () => {
+                    let browsingOrderIndex = Math.floor(Math.random() * len)
+                    order = this.tableData[browsingOrderIndex]
+                    this.browsingOrder = order
+                }
+
+                getBrowsingOrder()
+                let browsingOrderInterval = setInterval(getBrowsingOrder, 50)
+
+                // 计时
+                let browsingTimeRun = originalTime => {
+                    let time
+                    originalTime.second >= 59 ?
+                        time = {minute: ++originalTime.minute, second: 0} :
+                        time = {minute: originalTime.minute, second: ++originalTime.second}
+
+                    this.browsingTime = time
+
+                    // 计时停止
+                    if (time.minute === this.minute && time.second === this.second) {
+                        clearInterval(browsingOrderInterval)
+
+                        let formatPhone = this.formatPhone
+                        // 弹框通知
+                        Modal.success({
+                            title: '恭喜抽中奖品！',
+                            content: function (createElement) {
+                                return createElement(
+                                    'div',
+                                    {order},
+                                    [
+                                        createElement('p', ['用户名: ', createElement('b', order.收件人)]),
+                                        createElement('p', ['用户名: ', createElement('b', order.订单号)]),
+                                        createElement('p', {style: {marginBottom: 0}}, ['手机号: ', createElement('b', formatPhone(order.收件人电话))])
+                                    ]
+                                )
+                            },
+                            onOk: close => {
+                                close()
+                                this.drawingPrizeVisible = false
+                                // 抽奖时间设置初始化
+                                this.browsingTime = {minute: -1, second: 59}
+                            },
+                            okText: '确定',
+                        })
+
+                        // 生成数据记录文件
+                        let date = new Date().toLocaleDateString().replace(/\/(\d{1,2})/g, (match, $1) => '-' + $1.padStart(2, '0'))
+                        let file_path = DIR + date + '.csv' // 文件路径
+                        let content = `${order.订单号},${order.商品名},${order.收件人},${order.收件人电话},${order.收件人地址}` // 记录内容
+
+                        if (!fs.existsSync(file_path)){ // 文件不存在
+                            if (!fs.existsSync(DIR)) fs.mkdirSync(DIR)  // 目录不存在:创建文件夹
+                            // 创建文件并写入初始内容
+                            fs.readdir(DIR, () => fs.writeFileSync(file_path, TITLES + '\n1,' + content))
+                        } else {
+                            let count = fs.readFileSync(file_path, 'utf8').split('\n').length
+                            fs.appendFileSync(file_path,  '\n' + count + ',' + content)
+                        }
+                        return
+                    }
+
+                    setTimeout(browsingTimeRun, 1000, time)
+                }
+
+                browsingTimeRun(this.browsingTime)
+            }
+        },
+    })
+</script>
+</body>
+</html>
